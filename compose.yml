@@ -1,0 +1,160 @@
+# Shared infrastructure — identity, storage, database, messaging and tracing
+# for every project under Documentos/ (Musify, Ping, docker-manager, ...).
+#
+# This file is the production shape: no published ports, no domains. Every
+# service is reachable only on the `infra-net` network. Development reaches
+# it through compose.dev.yml, which publishes the ports to the host instead
+# of joining a network — see README.md for why.
+#
+#   dev   docker compose -f compose.yml -f compose.dev.yml up -d
+#   prod  docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d
+#
+# A consuming project's own deploy stack does NOT get its own copy of any of
+# these services. It only needs this stack to already be up, and its own
+# one-shot bootstrap jobs (zitadel-init, seaweedfs-init) to create its own
+# OIDC apps / bucket against the shared instances below.
+
+networks:
+  infra-net:
+    name: infra-net
+
+services:
+  # --- Database ---------------------------------------------------------
+  # One instance, one database per consuming project (see postgres-init/).
+  # Zitadel provisions its own `zitadel` database itself, from the admin
+  # credentials below — it does not need an init script.
+  postgres:
+    image: postgres:17-alpine
+    container_name: infra-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [infra-net]
+    restart: unless-stopped
+
+  # --- Identity -----------------------------------------------------------
+  # OIDC provider shared by every project. `start-from-init` runs init +
+  # setup (both idempotent) and then starts, so the same command works on a
+  # cold and on a warm volume.
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:latest
+    container_name: infra-zitadel
+    command: start-from-init --masterkeyFromEnv --tlsMode disabled
+    environment:
+      ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY}
+      # The external domain/port form the token issuer and must be identical
+      # for the browser, every project's apps and the containers (Zitadel
+      # routes by Host).
+      ZITADEL_EXTERNALSECURE: ${ZITADEL_EXTERNAL_SECURE}
+      ZITADEL_EXTERNALDOMAIN: ${ZITADEL_EXTERNAL_DOMAIN}
+      ZITADEL_EXTERNALPORT: ${ZITADEL_EXTERNAL_PORT}
+      ZITADEL_TLS_ENABLED: "false"
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: zitadel
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${ZITADEL_DATABASE_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      # Initial console admin. Login: <username>@zitadel.<external domain>
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_ADMIN_USERNAME}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
+      # Service account + PAT written on init; each consuming project's own
+      # zitadel-init one-shot uses it to create its own project/apps.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: zitadel-admin-sa
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Admin Service Account
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /output/admin-sa.pat
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./zitadel/.output:/output
+    networks: [infra-net]
+    restart: unless-stopped
+
+  # --- Storage --------------------------------------------------------------
+  # S3-compatible object store shared by every project. All-in-one: master +
+  # volume + filer + S3 gateway. The S3 identity file is rendered from the
+  # environment on start so the credentials can never drift from the ones
+  # handed to consuming projects. No bucket is created here — each
+  # consuming project's own seaweedfs-init one-shot creates its own.
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: infra-seaweedfs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /tmp/s3.conf <<'JSON'
+        {
+          "identities": [
+            {
+              "name": "infra",
+              "credentials": [{ "accessKey": "${S3_ACCESS_KEY}", "secretKey": "${S3_SECRET_KEY}" }],
+              "actions": ["Admin", "Read", "Write"]
+            }
+          ]
+        }
+        JSON
+        exec weed server \
+          -ip.bind=0.0.0.0 \
+          -dir=/data \
+          -master.volumeSizeLimitMB=1024 \
+          -volume.max=0 \
+          -filer \
+          -s3 \
+          -s3.config=/tmp/s3.conf
+    volumes:
+      - seaweedfs_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9333/cluster/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [infra-net]
+    restart: unless-stopped
+
+  # --- Messaging --------------------------------------------------------
+  # Broker shared by every project. Each project's own consumers/exchanges
+  # are project-specific; only the broker itself lives here.
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: infra-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [infra-net]
+    restart: unless-stopped
+
+  # --- Tracing --------------------------------------------------------------
+  # OTLP collector + trace UI, shared by any project's OpenTelemetry exporter.
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: infra-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks: [infra-net]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  seaweedfs_data:
+  rabbitmq_data:

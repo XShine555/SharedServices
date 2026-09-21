@@ -1,0 +1,54 @@
+name: infra-dev
+
+# Development overlay: publishes every service's port to the host, so any
+# project's dev stack can reach them at host.docker.internal:<port> instead
+# of joining infra-net. Adds pgAdmin.
+#
+#   docker compose -f compose.yml -f compose.dev.yml up -d
+
+services:
+  postgres:
+    ports:
+      - "${POSTGRES_HOST_PORT}:5432"
+
+  zitadel:
+    ports:
+      - "${ZITADEL_EXTERNAL_PORT}:8080"
+
+  seaweedfs:
+    ports:
+      - "9333:9333" # master / admin UI
+      - "8888:8888" # filer
+      - "8333:8333" # S3 API
+
+  rabbitmq:
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # management UI
+
+  jaeger:
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+  # Optional Postgres UI: docker compose ... --profile tools up -d
+  pgadmin:
+    profiles: [tools]
+    image: dpage/pgadmin4:latest
+    container_name: infra-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${PGADMIN_HOST_PORT}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
+
+volumes:
+  pgadmin_data:

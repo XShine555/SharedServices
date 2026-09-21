@@ -1,0 +1,12 @@
+# Environment files (.env, .env.prod)
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Runtime state written by the containers themselves
+zitadel/.output/
+
+# OS
+Thumbs.db
+.DS_Store
