@@ -1,10 +1,10 @@
-# Shared infrastructure — identity, storage, database, messaging and tracing
-# for every project under Documentos/ (Musify, Ping, docker-manager, ...).
+# Shared infrastructure: identity, storage, database, messaging and tracing
+# for every project (Musify, Ping, docker-manager, ...).
 #
 # This file is the production shape: no published ports, no domains. Every
 # service is reachable only on the `infra-net` network. Development reaches
 # it through compose.dev.yml, which publishes the ports to the host instead
-# of joining a network — see README.md for why.
+# of joining a network. See README.md for why.
 #
 #   dev   docker compose -f compose.yml -f compose.dev.yml up -d
 #   prod  docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d
@@ -22,7 +22,7 @@ services:
   # --- Database ---------------------------------------------------------
   # One instance, one database per consuming project (see postgres-init/).
   # Zitadel provisions its own `zitadel` database itself, from the admin
-  # credentials below — it does not need an init script.
+  # credentials below, so it does not need an init script.
   postgres:
     image: postgres:17-alpine
     container_name: infra-postgres
@@ -88,7 +88,7 @@ services:
   # S3-compatible object store shared by every project. All-in-one: master +
   # volume + filer + S3 gateway. The S3 identity file is rendered from the
   # environment on start so the credentials can never drift from the ones
-  # handed to consuming projects. No bucket is created here — each
+  # handed to consuming projects. No bucket is created here; each
   # consuming project's own seaweedfs-init one-shot creates its own.
   seaweedfs:
     image: chrislusf/seaweedfs:latest
