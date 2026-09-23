@@ -47,7 +47,10 @@ services:
   zitadel:
     image: ghcr.io/zitadel/zitadel:latest
     container_name: infra-zitadel
-    command: start-from-init --masterkeyFromEnv --tlsMode disabled
+    # `disabled` (dev, plain http) makes Zitadel advertise http URLs; behind a
+    # TLS-terminating proxy it must be `external` or the console calls
+    # http://<domain> and the CSP blocks it.
+    command: start-from-init --masterkeyFromEnv --tlsMode ${ZITADEL_TLS_MODE:-disabled}
     environment:
       ZITADEL_MASTERKEY: ${ZITADEL_MASTERKEY}
       # The external domain/port form the token issuer and must be identical
