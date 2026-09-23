@@ -69,8 +69,15 @@ services:
       ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER}
       ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
       ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
-      # Initial console admin. Login: <username>@zitadel.<external domain>
+      # First organization and its console admin. Only read when the instance
+      # is created; changing them later doesn't rename anything that exists.
+      # A username without "@" gets `@<org domain>` appended; one with "@" is
+      # kept as is (e.g. admin@example.com).
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: ${ZITADEL_ORG_NAME:-ZITADEL}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_ADMIN_USERNAME}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_FIRSTNAME: ${ZITADEL_ADMIN_FIRST_NAME:-ZITADEL}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_LASTNAME: ${ZITADEL_ADMIN_LAST_NAME:-Admin}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_DISPLAYNAME: ${ZITADEL_ADMIN_DISPLAY_NAME:-ZITADEL Admin}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
       # Service account + PAT written on init; each consuming project's own
