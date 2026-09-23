@@ -95,6 +95,34 @@ with an example value that assumes these repos happen to sit as sibling
 folders. If yours don't, change it. Not versioned, and regenerated whenever
 the Zitadel volume is reset.
 
+## The public edge
+
+`edge/compose.yml` is the only thing that publishes host ports 80/443: one
+nginx that terminates TLS for every project's domains (Gitea, Musify, ...)
+and proxies to their containers by name, plus a certbot container that
+renews the Let's Encrypt certificates (webroot) and lets nginx reload them
+every 6 hours. It joins `infra-net` and the `gitea_gitea` network (both
+external, created by the stacks that own them).
+
+```bash
+docker compose -f edge/compose.yml up -d
+```
+
+- **Vhosts** live in `edge/conf.d/` (one file per project; `00-common.conf`
+  has the shared resolver). Every upstream is a `set $upstream ...`, resolved
+  per request, so a project's stack being down never stops the edge from
+  starting. Shared bits are in `edge/snippets/`. Check a change with
+  `docker exec edge-nginx nginx -t`, then `docker exec edge-nginx nginx -s reload`.
+- **Certificates** are state, not versioned (`edge/certbot/`). To issue one
+  for new hostnames (their DNS has to already point at the host):
+
+  ```bash
+  docker compose -f edge/compose.yml run --rm --entrypoint certbot certbot     certonly --webroot -w /var/www/certbot -d host1.example.com -d host2.example.com     --non-interactive --agree-tos -m you@example.com
+  ```
+
+  Then add the `server` blocks pointing at
+  `/etc/letsencrypt/live/<first -d name>/`.
+
 ## Resetting
 
 ```bash
@@ -111,6 +139,7 @@ re-creates its piece on the next `up`, since both are idempotent.
 ```
 Infrastructure/
 ├─ compose.yml            # postgres, zitadel, seaweedfs, rabbitmq, jaeger: the prod shape
+├─ edge/                  # shared public nginx + certbot (prod only): compose.yml, conf.d/, snippets/
 ├─ compose.dev.yml        # dev overlay: publishes ports, adds pgAdmin
 ├─ .env.example / .env.prod.example
 ├─ postgres-init/         # creates the per-project application databases

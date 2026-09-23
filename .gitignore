@@ -10,3 +10,6 @@ zitadel/.output/
 # OS
 Thumbs.db
 .DS_Store
+
+# Edge runtime state (Let's Encrypt account, certificates, ACME challenges)
+edge/certbot/

@@ -1,0 +1,51 @@
+# Shared public edge: the only thing that publishes host ports 80/443. One
+# nginx terminates TLS for every project's domains (Gitea, Musify, ...) and
+# proxies to their containers by name, over the networks below. Certificates
+# come from Let's Encrypt (webroot), renewed by the certbot service.
+#
+#   docker compose -f edge/compose.yml up -d
+#
+# Requires `infra-net` (created by ../compose.yml) and `gitea_gitea` (created
+# by the Gitea stack) to already exist.
+
+name: edge
+
+networks:
+  infra-net:
+    name: infra-net
+    external: true
+  gitea:
+    name: gitea_gitea
+    external: true
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: edge-nginx
+    # The subshell reloads nginx every 6h so renewed certificates get picked up.
+    command:
+      - /bin/sh
+      - -c
+      - "(while :; do sleep 6h; nginx -s reload; done) & exec nginx -g 'daemon off;'"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./snippets:/etc/nginx/snippets:ro
+      - ./certbot/www:/var/www/certbot:ro
+      - ./certbot/conf:/etc/letsencrypt:ro
+    networks: [gitea, infra-net]
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    container_name: edge-certbot
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    restart: unless-stopped
