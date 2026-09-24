@@ -85,7 +85,7 @@ docker exec infra-rabbitmq rabbitmqctl import_definitions /var/lib/rabbitmq/defs
 |---|---|---|
 | PostgreSQL | `5432` | one instance, one database per project |
 | Zitadel | `8080` | OIDC/OAuth2, console at `/ui/console` |
-| Zitadel login | `3100` | Login V2 UI at `/ui/v2/login` (under `8080`'s hostname in prod) |
+| Zitadel login | `3900` | Login V2 UI at `/ui/v2/login` (under `8080`'s hostname in prod) |
 | SeaweedFS | `8333` / `8888` / `9333` | S3 API / filer / master |
 | RabbitMQ | `5672` / `15672` | AMQP / management UI |
 | Jaeger | `16686` / `4317` / `4318` | UI / OTLP gRPC / OTLP HTTP |
@@ -130,7 +130,7 @@ writes on init to the `zitadel_bootstrap` volume, which only `zitadel-login`
 mounts.
 
 - **Dev**: no proxy, so the login has its own port (`ZITADEL_LOGIN_HOST_PORT`,
-  `3100`) and `ZITADEL_LOGIN_BASE_URL` points the browser at it.
+  `3900`) and `ZITADEL_LOGIN_BASE_URL` points the browser at it.
 - **Prod**: the edge routes `/ui/v2/login` on Zitadel's hostname to
   `infra-zitadel-login`, and everything else to Zitadel.
 - `zitadel` and `zitadel-login` are pinned to the same version; bump both
