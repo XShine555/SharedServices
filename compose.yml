@@ -192,6 +192,10 @@ services:
   rabbitmq:
     image: rabbitmq:4-management-alpine
     container_name: infra-rabbitmq
+    # The node is named rabbit@<hostname> and its data lives under that name.
+    # Without a fixed hostname every recreated container gets a new one and
+    # starts on an empty data directory (users, vhosts, queues all gone).
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}

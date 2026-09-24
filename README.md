@@ -52,7 +52,30 @@ docker compose --env-file .env.prod -f compose.yml up -d
 
 A consuming project's own production compose joins `infra-net` as an
 external network to reach `postgres`, `zitadel`, `seaweedfs`, `rabbitmq` and
-`jaeger` by container name (see Musify's `deploy/compose.prod.yml`).
+`jaeger` by name (see Musify's `deploy/compose.prod.yml`).
+
+Every project on `infra-net` shares one DNS namespace, and Docker answers a
+service name with *every* container that has it, round-robin. Two projects
+each with a service called `api` would get each other's traffic. So anything
+that crosses projects (the edge, or one project calling into this stack)
+should use the unique `container_name` (`infra-postgres`, `musify-api`, ...),
+never a generic service name.
+
+### RabbitMQ and its hostname
+
+RabbitMQ keeps its data under its node name, `rabbit@<hostname>`, so the
+container has a fixed `hostname: rabbitmq`. Without it every recreated
+container (an image update, an `.env` change) came up with a new hostname
+and an empty broker. A deployment that ran before this was fixed has its
+data under the old random name; carry the definitions (users, vhosts,
+permissions, queues, exchanges) over when applying the change, ideally with
+the queues drained, since queued messages aren't part of the export:
+
+```bash
+docker exec infra-rabbitmq rabbitmqctl export_definitions /var/lib/rabbitmq/defs.json
+docker compose --env-file .env.prod -f compose.yml up -d rabbitmq
+docker exec infra-rabbitmq rabbitmqctl import_definitions /var/lib/rabbitmq/defs.json
+```
 
 ### Ports (development)
 
@@ -143,7 +166,8 @@ docker compose -f edge/compose.yml up -d
 - **Vhosts** live in `edge/conf.d/` (one file per project; `00-common.conf`
   has the shared resolver). Every upstream is a `set $upstream ...`, resolved
   per request, so a project's stack being down never stops the edge from
-  starting. Shared bits are in `edge/snippets/`. Check a change with
+  starting. Upstreams use the target's `container_name` (see "Running it"
+  above for why). Shared bits are in `edge/snippets/`. Check a change with
   `docker exec edge-nginx nginx -t`, then `docker exec edge-nginx nginx -s reload`.
 - **Certificates** are state, not versioned (`edge/certbot/`). To issue one
   for new hostnames (their DNS has to already point at the host):
