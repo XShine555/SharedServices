@@ -7,12 +7,25 @@
 # of joining a network. See README.md for why.
 #
 #   dev   docker compose -f compose.yml -f compose.dev.yml up -d
-#   prod  docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d
+#   prod  docker compose --env-file .env.prod -f compose.yml up -d
 #
 # A consuming project's own deploy stack does NOT get its own copy of any of
 # these services. It only needs this stack to already be up, and its own
 # one-shot bootstrap jobs (zitadel-init, seaweedfs-init) to create its own
 # OIDC apps / bucket against the shared instances below.
+
+# Docker's default json-file driver never rotates, so logs would grow until
+# the disk fills up.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+# The consuming projects that get their own credentials (see provision/).
+# Adding one: add it here, give it the <PROJECT>_* settings in both
+# `provision` and `seaweedfs` below, and their values in the env files.
+x-projects: &projects musify ping dockermanager
 
 networks:
   infra-net:
@@ -20,9 +33,10 @@ networks:
 
 services:
   # --- Database ---------------------------------------------------------
-  # One instance, one database per consuming project (see postgres-init/).
-  # Zitadel provisions its own `zitadel` database itself, from the admin
-  # credentials below, so it does not need an init script.
+  # One instance, one database and one role per consuming project (created
+  # by `provision` below). Zitadel creates its own `zitadel` database and
+  # user itself, from the admin credentials. The superuser is only for this
+  # stack: no project gets it.
   postgres:
     image: postgres:17-alpine
     container_name: infra-postgres
@@ -31,13 +45,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Identity -----------------------------------------------------------
@@ -45,8 +59,13 @@ services:
   # setup (both idempotent) and then starts, so the same command works on a
   # cold and on a warm volume.
   zitadel:
-    image: ghcr.io/zitadel/zitadel:latest
+    # Pinned together with zitadel-login below: bump both at once.
+    image: ghcr.io/zitadel/zitadel:v4.19.1
     container_name: infra-zitadel
+    # The image runs as uid 1000, but Docker creates both the bind mount
+    # (on Linux) and the bootstrap volume as root, so Zitadel couldn't write
+    # the PATs into them. Same as Zitadel's own compose.
+    user: "0"
     # `disabled` (dev, plain http) makes Zitadel advertise http URLs; behind a
     # TLS-terminating proxy it must be `external` or the console calls
     # http://<domain> and the CSP blocks it.
@@ -69,47 +88,106 @@ services:
       ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: ${POSTGRES_USER}
       ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
       ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
-      # Initial console admin. Login: <username>@zitadel.<external domain>
+      # First organization and its console admin. Only read when the instance
+      # is created; changing them later doesn't rename anything that exists.
+      # A username without "@" gets `@<org domain>` appended; one with "@" is
+      # kept as is (e.g. admin@example.com).
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: ${ZITADEL_ORG_NAME:-ZITADEL}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: ${ZITADEL_ADMIN_USERNAME}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_FIRSTNAME: ${ZITADEL_ADMIN_FIRST_NAME:-ZITADEL}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_LASTNAME: ${ZITADEL_ADMIN_LAST_NAME:-Admin}
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_DISPLAYNAME: ${ZITADEL_ADMIN_DISPLAY_NAME:-ZITADEL Admin}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: ${ZITADEL_ADMIN_PASSWORD}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
-      # Service account + PAT written on init; each consuming project's own
-      # zitadel-init one-shot uses it to create its own project/apps.
+      # Instance-admin service account + PAT written on init. Only `provision`
+      # uses it, to give each project its own, project-scoped account.
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: zitadel-admin-sa
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Admin Service Account
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
       ZITADEL_FIRSTINSTANCE_PATPATH: /output/admin-sa.pat
+      # Service account the login UI (zitadel-login) calls the API with. Its
+      # PAT goes to a volume only that container mounts, not to /output.
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Automatically Initialized IAM_LOGIN_CLIENT
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /bootstrap/login-client.pat
+      # Login V2: sign-in pages are served by zitadel-login, not by Zitadel
+      # itself. Like the FIRSTINSTANCE values, these are only read when the
+      # instance is created (see README for an existing instance).
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: ${ZITADEL_LOGIN_BASE_URL}/
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: ${ZITADEL_LOGIN_BASE_URL}/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: ${ZITADEL_LOGIN_BASE_URL}/logout?post_logout_redirect=
+      ZITADEL_SAML_DEFAULTLOGINURLV2: ${ZITADEL_LOGIN_BASE_URL}/login?samlRequest=
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./zitadel/.output:/output
+      - zitadel_bootstrap:/bootstrap
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
     networks: [infra-net]
+    logging: *default-logging
+    restart: unless-stopped
+
+  # Login V2 UI (Next.js), served under /ui/v2/login. It calls the API
+  # directly on infra-net, so it has to present the public Host/scheme for
+  # Zitadel to find the instance.
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:v4.19.1
+    container_name: infra-zitadel-login
+    environment:
+      ZITADEL_API_URL: http://zitadel:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /bootstrap/login-client.pat
+      CUSTOM_REQUEST_HEADERS: Host:${ZITADEL_EXTERNAL_DOMAIN},X-Forwarded-Proto:${ZITADEL_PUBLIC_SCHEME}
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "node /app/healthcheck.mjs http://localhost:3000/ui/v2/login/healthy"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    volumes:
+      - zitadel_bootstrap:/bootstrap:ro
+    networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Storage --------------------------------------------------------------
   # S3-compatible object store shared by every project. All-in-one: master +
-  # volume + filer + S3 gateway. The S3 identity file is rendered from the
-  # environment on start so the credentials can never drift from the ones
-  # handed to consuming projects. No bucket is created here; each
-  # consuming project's own seaweedfs-init one-shot creates its own.
+  # volume + filer + S3 gateway. The S3 identities are rendered from the
+  # environment on start (provision/seaweedfs-s3-config.sh): an admin one
+  # for this stack, and one per project limited to that project's bucket.
+  # No bucket is created here; each consuming project's own seaweedfs-init
+  # one-shot creates its own.
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.47
     container_name: infra-seaweedfs
+    environment:
+      PROJECTS: *projects
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      MUSIFY_S3_ACCESS_KEY: ${MUSIFY_S3_ACCESS_KEY:-}
+      MUSIFY_S3_SECRET_KEY: ${MUSIFY_S3_SECRET_KEY:-}
+      MUSIFY_S3_BUCKET: webapi-storage
+      PING_S3_ACCESS_KEY: ${PING_S3_ACCESS_KEY:-}
+      PING_S3_SECRET_KEY: ${PING_S3_SECRET_KEY:-}
+      PING_S3_BUCKET: ping-storage
+      DOCKERMANAGER_S3_ACCESS_KEY: ${DOCKERMANAGER_S3_ACCESS_KEY:-}
+      DOCKERMANAGER_S3_SECRET_KEY: ${DOCKERMANAGER_S3_SECRET_KEY:-}
+      DOCKERMANAGER_S3_BUCKET: dockermanager
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        cat > /tmp/s3.conf <<'JSON'
-        {
-          "identities": [
-            {
-              "name": "infra",
-              "credentials": [{ "accessKey": "${S3_ACCESS_KEY}", "secretKey": "${S3_SECRET_KEY}" }],
-              "actions": ["Admin", "Read", "Write"]
-            }
-          ]
-        }
-        JSON
+        sh /provision/seaweedfs-s3-config.sh >/tmp/s3.conf || exit 1
         exec weed server \
           -ip.bind=0.0.0.0 \
           -dir=/data \
@@ -120,12 +198,14 @@ services:
           -s3.config=/tmp/s3.conf
     volumes:
       - seaweedfs_data:/data
+      - ./provision:/provision:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9333/cluster/healthz"]
       interval: 10s
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Messaging --------------------------------------------------------
@@ -134,6 +214,10 @@ services:
   rabbitmq:
     image: rabbitmq:4-management-alpine
     container_name: infra-rabbitmq
+    # The node is named rabbit@<hostname> and its data lives under that name.
+    # Without a fixed hostname every recreated container gets a new one and
+    # starts on an empty data directory (users, vhosts, queues all gone).
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
@@ -145,19 +229,72 @@ services:
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Tracing --------------------------------------------------------------
   # OTLP collector + trace UI, shared by any project's OpenTelemetry exporter.
+  # Last Jaeger v1 release (v1 is deprecated; v2 is jaegertracing/jaeger).
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     container_name: infra-jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      # Traces are kept in memory; without a cap they grow until the
+      # container runs out of RAM. The oldest are dropped first.
+      MEMORY_MAX_TRACES: "100000"
+    healthcheck:
+      # Admin port: answers 200 once the collector and query service are up.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
+
+  # --- Per-project credentials ----------------------------------------------
+  # One-shot, runs on every `up` (idempotent): each project's own Postgres
+  # role/database, RabbitMQ user/vhost and Zitadel service account, from the
+  # <PROJECT>_* settings (see provision/provision.sh). An empty setting skips
+  # that service for that project.
+  provision:
+    image: postgres:17-alpine
+    container_name: infra-provision
+    entrypoint: ["/bin/sh", "/provision/provision.sh"]
+    environment:
+      PROJECTS: *projects
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      ZITADEL_EXTERNAL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN}
+      ZITADEL_PUBLIC_SCHEME: ${ZITADEL_PUBLIC_SCHEME}
+      MUSIFY_DB_PASSWORD: ${MUSIFY_DB_PASSWORD:-}
+      MUSIFY_RABBITMQ_PASSWORD: ${MUSIFY_RABBITMQ_PASSWORD:-}
+      MUSIFY_ZITADEL_PROJECT: Musify
+      PING_DB_PASSWORD: ${PING_DB_PASSWORD:-}
+      PING_RABBITMQ_PASSWORD: ${PING_RABBITMQ_PASSWORD:-}
+      PING_ZITADEL_PROJECT: Ping
+      DOCKERMANAGER_DB_PASSWORD: ${DOCKERMANAGER_DB_PASSWORD:-}
+      DOCKERMANAGER_RABBITMQ_PASSWORD: ${DOCKERMANAGER_RABBITMQ_PASSWORD:-}
+      DOCKERMANAGER_ZITADEL_PROJECT: Docker Manager
+    volumes:
+      - ./provision:/provision:ro
+      - ./zitadel/.output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      zitadel:
+        condition: service_healthy
+    networks: [infra-net]
+    logging: *default-logging
+    restart: "no"
 
 volumes:
   postgres_data:
+  zitadel_bootstrap:
   seaweedfs_data:
   rabbitmq_data:
