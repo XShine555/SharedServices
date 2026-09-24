@@ -169,6 +169,13 @@ docker compose -f edge/compose.yml up -d
   starting. Upstreams use the target's `container_name` (see "Running it"
   above for why). Shared bits are in `edge/snippets/`. Check a change with
   `docker exec edge-nginx nginx -t`, then `docker exec edge-nginx nginx -s reload`.
+- **Unknown hostnames** hit `01-default.conf`: port 80 closes the connection
+  (ACME challenges still work), port 443 refuses the TLS handshake. Nothing
+  reaches a project unless its vhost names the host.
+- **TLS** settings (`snippets/tls.conf`) follow Mozilla's intermediate
+  profile and send HSTS with a 1-day `max-age`. Raise it once every hostname
+  is confirmed to work over https: browsers remember it, so a long value
+  can't be taken back quickly.
 - **Certificates** are state, not versioned (`edge/certbot/`). To issue one
   for new hostnames (their DNS has to already point at the host):
 
