@@ -37,7 +37,7 @@ cp .env.example .env
 docker compose -f compose.yml -f compose.dev.yml up -d
 ```
 
-That starts Postgres, Zitadel, SeaweedFS, RabbitMQ and Jaeger, with their
+That starts Postgres, Zitadel (and its login UI), SeaweedFS, RabbitMQ and Jaeger, with their
 ports published to `localhost`. Add `--profile tools` to also start pgAdmin.
 
 In production, the base `compose.yml` file **is** the production shape
@@ -60,6 +60,7 @@ external network to reach `postgres`, `zitadel`, `seaweedfs`, `rabbitmq` and
 |---|---|---|
 | PostgreSQL | `5432` | one instance, one database per project |
 | Zitadel | `8080` | OIDC/OAuth2, console at `/ui/console` |
+| Zitadel login | `3100` | Login V2 UI at `/ui/v2/login` (under `8080`'s hostname in prod) |
 | SeaweedFS | `8333` / `8888` / `9333` | S3 API / filer / master |
 | RabbitMQ | `5672` / `15672` | AMQP / management UI |
 | Jaeger | `16686` / `4317` / `4318` | UI / OTLP gRPC / OTLP HTTP |
@@ -94,6 +95,37 @@ consuming project's `deploy/` folder. Each project's `.env.example` ships
 with an example value that assumes these repos happen to sit as sibling
 folders. If yours don't, change it. Not versioned, and regenerated whenever
 the Zitadel volume is reset.
+
+### The Zitadel login (Login V2)
+
+Zitadel v4 serves its sign-in pages from a separate container,
+`zitadel-login` (Next.js), under `/ui/v2/login`. Zitadel redirects every
+login there, so it has to be running for anyone to sign in. It calls the
+Zitadel API with its own service account (`login-client`), whose PAT Zitadel
+writes on init to the `zitadel_bootstrap` volume, which only `zitadel-login`
+mounts.
+
+- **Dev**: no proxy, so the login has its own port (`ZITADEL_LOGIN_HOST_PORT`,
+  `3100`) and `ZITADEL_LOGIN_BASE_URL` points the browser at it.
+- **Prod**: the edge routes `/ui/v2/login` on Zitadel's hostname to
+  `infra-zitadel-login`, and everything else to Zitadel.
+- `zitadel` and `zitadel-login` are pinned to the same version; bump both
+  together.
+
+`ZITADEL_LOGIN_BASE_URL` and the `login-client` PAT are only applied when the
+instance is created. On an instance created before `zitadel-login` existed:
+
+1. In the console, create a service user `login-client`, give it the
+   instance role **IAM Login Client**, and create a PAT for it.
+2. Copy it into the volume and restart the login:
+
+   ```bash
+   docker cp login-client.pat infra-zitadel:/bootstrap/login-client.pat
+   docker restart infra-zitadel-login
+   ```
+
+3. If the instance still uses the old login, set Login V2 as required with
+   base URI `${ZITADEL_LOGIN_BASE_URL}/` in the instance's feature settings.
 
 ## The public edge
 
@@ -138,7 +170,7 @@ re-creates its piece on the next `up`, since both are idempotent.
 
 ```
 Infrastructure/
-├─ compose.yml            # postgres, zitadel, seaweedfs, rabbitmq, jaeger: the prod shape
+├─ compose.yml            # postgres, zitadel (+ login), seaweedfs, rabbitmq, jaeger: the prod shape
 ├─ edge/                  # shared public nginx + certbot (prod only): compose.yml, conf.d/, snippets/
 ├─ compose.dev.yml        # dev overlay: publishes ports, adds pgAdmin
 ├─ .env.example / .env.prod.example

@@ -15,6 +15,12 @@ services:
     ports:
       - "${ZITADEL_EXTERNAL_PORT}:8080"
 
+  # No edge in dev to put the login under Zitadel's own port, so it gets its
+  # own (ZITADEL_LOGIN_BASE_URL in .env points the browser at it).
+  zitadel-login:
+    ports:
+      - "${ZITADEL_LOGIN_HOST_PORT}:3000"
+
   seaweedfs:
     ports:
       - "9333:9333" # master / admin UI

@@ -45,8 +45,13 @@ services:
   # setup (both idempotent) and then starts, so the same command works on a
   # cold and on a warm volume.
   zitadel:
-    image: ghcr.io/zitadel/zitadel:latest
+    # Pinned together with zitadel-login below: bump both at once.
+    image: ghcr.io/zitadel/zitadel:v4.19.1
     container_name: infra-zitadel
+    # The image runs as uid 1000, but Docker creates both the bind mount
+    # (on Linux) and the bootstrap volume as root, so Zitadel couldn't write
+    # the PATs into them. Same as Zitadel's own compose.
+    user: "0"
     # `disabled` (dev, plain http) makes Zitadel advertise http URLs; behind a
     # TLS-terminating proxy it must be `external` or the console calls
     # http://<domain> and the CSP blocks it.
@@ -86,11 +91,57 @@ services:
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Admin Service Account
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
       ZITADEL_FIRSTINSTANCE_PATPATH: /output/admin-sa.pat
+      # Service account the login UI (zitadel-login) calls the API with. Its
+      # PAT goes to a volume only that container mounts, not to /output.
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Automatically Initialized IAM_LOGIN_CLIENT
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /bootstrap/login-client.pat
+      # Login V2: sign-in pages are served by zitadel-login, not by Zitadel
+      # itself. Like the FIRSTINSTANCE values, these are only read when the
+      # instance is created (see README for an existing instance).
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+      ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: ${ZITADEL_LOGIN_BASE_URL}/
+      ZITADEL_OIDC_DEFAULTLOGINURLV2: ${ZITADEL_LOGIN_BASE_URL}/login?authRequest=
+      ZITADEL_OIDC_DEFAULTLOGOUTURLV2: ${ZITADEL_LOGIN_BASE_URL}/logout?post_logout_redirect=
+      ZITADEL_SAML_DEFAULTLOGINURLV2: ${ZITADEL_LOGIN_BASE_URL}/login?samlRequest=
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./zitadel/.output:/output
+      - zitadel_bootstrap:/bootstrap
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
+    networks: [infra-net]
+    restart: unless-stopped
+
+  # Login V2 UI (Next.js), served under /ui/v2/login. It calls the API
+  # directly on infra-net, so it has to present the public Host/scheme for
+  # Zitadel to find the instance.
+  zitadel-login:
+    image: ghcr.io/zitadel/zitadel-login:v4.19.1
+    container_name: infra-zitadel-login
+    environment:
+      ZITADEL_API_URL: http://zitadel:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /bootstrap/login-client.pat
+      CUSTOM_REQUEST_HEADERS: Host:${ZITADEL_EXTERNAL_DOMAIN},X-Forwarded-Proto:${ZITADEL_PUBLIC_SCHEME}
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "node /app/healthcheck.mjs http://localhost:3000/ui/v2/login/healthy"]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 20s
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    volumes:
+      - zitadel_bootstrap:/bootstrap:ro
     networks: [infra-net]
     restart: unless-stopped
 
@@ -166,5 +217,6 @@ services:
 
 volumes:
   postgres_data:
+  zitadel_bootstrap:
   seaweedfs_data:
   rabbitmq_data:
