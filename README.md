@@ -138,6 +138,17 @@ only thing that doesn't carry over is RabbitMQ: a project now uses its own
 vhost, so drain its queues on `/` first; its consumers recreate their
 exchanges and queues in the new vhost.
 
+### One Zitadel for every project
+
+Every project signs its users in against the same instance and the same
+organization (the first one, `ZITADEL_ORG_NAME`), each with its own Zitadel
+project for its apps. So there is one account per person, not one per
+project: someone who registers in Musify can sign in to Ping with the same
+account, and a session in one app is reused by the others (single sign-on),
+because none of the projects requires a per-project grant or role to sign
+in. Keep it that way when adding a project: point its issuer at this
+Zitadel (`PUBLIC_AUTH_URL`), and don't create a separate organization for it.
+
 ### The Zitadel PAT
 
 Each project's `zitadel-init` mounts **its own** folder,

@@ -278,7 +278,7 @@ services:
       PING_ZITADEL_PROJECT: Ping
       DOCKERMANAGER_DB_PASSWORD: ${DOCKERMANAGER_DB_PASSWORD:-}
       DOCKERMANAGER_RABBITMQ_PASSWORD: ${DOCKERMANAGER_RABBITMQ_PASSWORD:-}
-      DOCKERMANAGER_ZITADEL_PROJECT: ""
+      DOCKERMANAGER_ZITADEL_PROJECT: Docker Manager
     volumes:
       - ./provision:/provision:ro
       - ./zitadel/.output:/output
