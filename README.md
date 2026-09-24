@@ -8,8 +8,7 @@ provisioning, and keeping in sync) its own copy, they run once, here.
 
 This repo doesn't assume anything about where the other projects are
 checked out. Each one just needs a local path to this repo's checkout (see
-"The Zitadel admin PAT" below), which you set once in that project's own
-`.env`.
+"The Zitadel PAT" below), which you set once in that project's own `.env`.
 
 Each project keeps its own independent, fast `docker compose up` for the
 things that actually are its own: API/worker/gateway containers, database
@@ -23,7 +22,7 @@ needs to know a consuming project exists.
 
 | Here (shared) | Stays in each project |
 |---|---|
-| PostgreSQL (one instance, one database per project) | The project's own EF Core migrations, connection pooling config |
+| PostgreSQL (one instance, one database and role per project) | The project's own EF Core migrations, connection pooling config |
 | Zitadel (OIDC provider) | The project's own OIDC app registration (`zitadel-init`), JWT validation config |
 | SeaweedFS (S3 storage) | The project's own bucket (`seaweedfs-init`), key layout |
 | RabbitMQ (broker) | The project's own exchanges/queues/consumers |
@@ -83,7 +82,7 @@ docker exec infra-rabbitmq rabbitmqctl import_definitions /var/lib/rabbitmq/defs
 
 | Service | Port | Notes |
 |---|---|---|
-| PostgreSQL | `5432` | one instance, one database per project |
+| PostgreSQL | `5432` | one instance, one database and role per project |
 | Zitadel | `8080` | OIDC/OAuth2, console at `/ui/console` |
 | Zitadel login | `3900` | Login V2 UI at `/ui/v2/login` (under `8080`'s hostname in prod) |
 | SeaweedFS | `8333` / `8888` / `9333` | S3 API / filer / master |
@@ -98,27 +97,60 @@ running (in Docker or from the IDE). No shared Docker network is needed in
 development, which is what keeps every project's own `up` independent and
 fast, with this stack as the only prerequisite.
 
-### Shared secrets
+### Per-project credentials
 
-`POSTGRES_USER`/`POSTGRES_PASSWORD`, `S3_ACCESS_KEY`/`S3_SECRET_KEY`,
-`RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` and `PUBLIC_AUTH_URL` (i.e.
-`http://host.docker.internal:${ZITADEL_EXTERNAL_PORT}` in dev) are the values
-every consuming project's own `.env.example` copies and documents as "must
-match this repo's `.env`". This file is the source of truth for them.
+No project gets an admin account. `provision` (a one-shot that runs on
+every `up`, see `provision/`) gives each project listed in `compose.yml`'s
+`x-projects` its own credentials, from the `<PROJECT>_*` settings in the env
+file:
 
-### The Zitadel admin PAT
+| Service | What the project gets | Setting |
+|---|---|---|
+| PostgreSQL | role `<project>`, owner of database `<project>_db`; no other role can connect to it, and it can't connect to any other | `<PROJECT>_DB_PASSWORD` |
+| RabbitMQ | user `<project>`, only on vhost `<project>` | `<PROJECT>_RABBITMQ_PASSWORD` |
+| SeaweedFS | S3 identity limited to the project's bucket (it may create that bucket, nothing else) | `<PROJECT>_S3_ACCESS_KEY` / `_SECRET_KEY` |
+| Zitadel | service account `<project>-provisioner`, owner of the project's own Zitadel project only; its PAT is in `zitadel/.output/<project>/zitadel.pat` | (the project name, in `compose.yml`) |
 
-Zitadel itself writes a service-account personal access token to
-`zitadel/.output/admin-sa.pat` when the instance is created. Every consuming project mounts that same folder read-only, via
-its own `ZITADEL_ADMIN_PAT_DIR` setting, to call the Zitadel management API
-and create its own project/apps.
+An empty setting means that project doesn't use that service. Each
+project's own `.env.example` copies its values from here and says so; this
+repo's env file is the source of truth. Passwords are re-applied on every
+`up`, so rotating one is: change it here and in the project, `up` both.
+
+The admin accounts (`POSTGRES_*`, `RABBITMQ_DEFAULT_*`, `S3_ACCESS_KEY` /
+`S3_SECRET_KEY`, `zitadel/.output/admin-sa.pat`) stay with this stack.
+
+Two limits worth knowing: the Zitadel `PROJECT_OWNER` role can still read
+the organization's users (every project's users are in the one
+organization); and S3 keys must only use `A-Z a-z 0-9 _ + / = . -` (they go
+into SeaweedFS's JSON config as they are).
+
+**Adding a project**: add it to `x-projects`, add its `<PROJECT>_*` lines
+to `provision`'s and `seaweedfs`'s environment in `compose.yml` (with its
+bucket and Zitadel project name), put its values in `.env.example` /
+`.env.prod.example`, and `up`.
+
+**Moving an existing deployment over**: fill in the new `<PROJECT>_*`
+values and `up`. `provision` hands over the existing databases (and every
+table, sequence, type, view and function in them) to each project's role,
+reuses the existing Zitadel projects and apps, and leaves the buckets as
+they are. Then switch each project's env file to its own credentials. The
+only thing that doesn't carry over is RabbitMQ: a project now uses its own
+vhost, so drain its queues on `/` first; its consumers recreate their
+exchanges and queues in the new vhost.
+
+### The Zitadel PAT
+
+Each project's `zitadel-init` mounts **its own** folder,
+`zitadel/.output/<project>/`, read-only (via that project's
+`ZITADEL_PAT_DIR` setting) and uses the PAT in it to create its OIDC apps in
+its own Zitadel project. It can't see or change any other project's.
 
 That setting has no universally correct value. It's a path (relative or
 absolute) to wherever *you* cloned this repo on your machine, from the
 consuming project's `deploy/` folder. Each project's `.env.example` ships
 with an example value that assumes these repos happen to sit as sibling
-folders. If yours don't, change it. Not versioned, and regenerated whenever
-the Zitadel volume is reset.
+folders. If yours don't, change it. Not versioned; `provision` issues a new
+PAT whenever the one there stops working (e.g. after a Zitadel volume reset).
 
 ### The Zitadel login (Login V2)
 
@@ -208,6 +240,6 @@ Infrastructure/
 ├─ edge/                  # shared public nginx + certbot (prod only): compose.yml, conf.d/, snippets/
 ├─ compose.dev.yml        # dev overlay: publishes ports, adds pgAdmin
 ├─ .env.example / .env.prod.example
-├─ postgres-init/         # creates the per-project application databases
-└─ zitadel/.output/       # PAT written by Zitadel on init (not versioned)
+├─ provision/            # per-project credentials: Postgres, RabbitMQ, Zitadel, S3 identities
+└─ zitadel/.output/       # admin PAT + one folder per project with its own PAT (not versioned)
 ```
