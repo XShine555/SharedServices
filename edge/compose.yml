@@ -10,6 +10,14 @@
 
 name: edge
 
+# Docker's default json-file driver never rotates, so logs would grow until
+# the disk fills up.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 networks:
   infra-net:
     name: infra-net
@@ -36,10 +44,11 @@ services:
       - ./certbot/www:/var/www/certbot:ro
       - ./certbot/conf:/etc/letsencrypt:ro
     networks: [gitea, infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   certbot:
-    image: certbot/certbot
+    image: certbot/certbot:v5.8.0
     container_name: edge-certbot
     entrypoint:
       - /bin/sh
@@ -48,4 +57,5 @@ services:
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
+    logging: *default-logging
     restart: unless-stopped

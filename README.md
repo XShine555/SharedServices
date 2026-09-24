@@ -38,7 +38,9 @@ docker compose -f compose.yml -f compose.dev.yml up -d
 ```
 
 That starts Postgres, Zitadel (and its login UI), SeaweedFS, RabbitMQ and Jaeger, with their
-ports published to `localhost`. Add `--profile tools` to also start pgAdmin.
+ports published on `127.0.0.1` only (`DEV_BIND_ADDRESS`), so the dev
+credentials aren't reachable from the LAN. Add `--profile tools` to also
+start pgAdmin.
 
 In production, the base `compose.yml` file **is** the production shape
 already. There are no published ports, and everything is reachable only on
@@ -106,9 +108,8 @@ match this repo's `.env`". This file is the source of truth for them.
 
 ### The Zitadel admin PAT
 
-`zitadel-init` (in the compose file of whichever project runs it first)
-writes a service-account personal access token to `zitadel/.output/admin-sa.pat`
-on first init. Every consuming project mounts that same folder read-only, via
+Zitadel itself writes a service-account personal access token to
+`zitadel/.output/admin-sa.pat` when the instance is created. Every consuming project mounts that same folder read-only, via
 its own `ZITADEL_ADMIN_PAT_DIR` setting, to call the Zitadel management API
 and create its own project/apps.
 
@@ -180,7 +181,9 @@ docker compose -f edge/compose.yml up -d
   for new hostnames (their DNS has to already point at the host):
 
   ```bash
-  docker compose -f edge/compose.yml run --rm --entrypoint certbot certbot     certonly --webroot -w /var/www/certbot -d host1.example.com -d host2.example.com     --non-interactive --agree-tos -m you@example.com
+  docker compose -f edge/compose.yml run --rm --entrypoint certbot certbot \
+    certonly --webroot -w /var/www/certbot -d host1.example.com -d host2.example.com \
+    --non-interactive --agree-tos -m you@example.com
   ```
 
   Then add the `server` blocks pointing at

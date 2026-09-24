@@ -7,12 +7,20 @@
 # of joining a network. See README.md for why.
 #
 #   dev   docker compose -f compose.yml -f compose.dev.yml up -d
-#   prod  docker compose --env-file .env.prod -f compose.yml -f compose.prod.yml up -d
+#   prod  docker compose --env-file .env.prod -f compose.yml up -d
 #
 # A consuming project's own deploy stack does NOT get its own copy of any of
 # these services. It only needs this stack to already be up, and its own
 # one-shot bootstrap jobs (zitadel-init, seaweedfs-init) to create its own
 # OIDC apps / bucket against the shared instances below.
+
+# Docker's default json-file driver never rotates, so logs would grow until
+# the disk fills up.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 networks:
   infra-net:
@@ -38,6 +46,7 @@ services:
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Identity -----------------------------------------------------------
@@ -118,6 +127,7 @@ services:
       retries: 12
       start_period: 20s
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # Login V2 UI (Next.js), served under /ui/v2/login. It calls the API
@@ -143,6 +153,7 @@ services:
     volumes:
       - zitadel_bootstrap:/bootstrap:ro
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Storage --------------------------------------------------------------
@@ -152,7 +163,7 @@ services:
   # handed to consuming projects. No bucket is created here; each
   # consuming project's own seaweedfs-init one-shot creates its own.
   seaweedfs:
-    image: chrislusf/seaweedfs:latest
+    image: chrislusf/seaweedfs:4.47
     container_name: infra-seaweedfs
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -184,6 +195,7 @@ services:
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Messaging --------------------------------------------------------
@@ -207,16 +219,28 @@ services:
       timeout: 5s
       retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
   # --- Tracing --------------------------------------------------------------
   # OTLP collector + trace UI, shared by any project's OpenTelemetry exporter.
+  # Last Jaeger v1 release (v1 is deprecated; v2 is jaegertracing/jaeger).
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     container_name: infra-jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
+      # Traces are kept in memory; without a cap they grow until the
+      # container runs out of RAM. The oldest are dropped first.
+      MEMORY_MAX_TRACES: "100000"
+    healthcheck:
+      # Admin port: answers 200 once the collector and query service are up.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [infra-net]
+    logging: *default-logging
     restart: unless-stopped
 
 volumes:

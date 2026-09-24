@@ -5,43 +5,49 @@ name: infra-dev
 # of joining infra-net. Adds pgAdmin.
 #
 #   docker compose -f compose.yml -f compose.dev.yml up -d
+#
+# Ports are bound to DEV_BIND_ADDRESS (127.0.0.1 by default), so the dev
+# credentials in .env are not reachable from the LAN. Other containers still
+# reach them through host.docker.internal. The browser on the host does too
+# as long as the hosts file maps host.docker.internal to 127.0.0.1; if yours
+# maps it to the LAN IP, set DEV_BIND_ADDRESS=0.0.0.0 (see .env.example).
 
 services:
   postgres:
     ports:
-      - "${POSTGRES_HOST_PORT}:5432"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_HOST_PORT}:5432"
 
   zitadel:
     ports:
-      - "${ZITADEL_EXTERNAL_PORT}:8080"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${ZITADEL_EXTERNAL_PORT}:8080"
 
   # No edge in dev to put the login under Zitadel's own port, so it gets its
   # own (ZITADEL_LOGIN_BASE_URL in .env points the browser at it).
   zitadel-login:
     ports:
-      - "${ZITADEL_LOGIN_HOST_PORT}:3000"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${ZITADEL_LOGIN_HOST_PORT}:3000"
 
   seaweedfs:
     ports:
-      - "9333:9333" # master / admin UI
-      - "8888:8888" # filer
-      - "8333:8333" # S3 API
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:9333:9333" # master / admin UI
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:8888:8888" # filer
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:8333:8333" # S3 API
 
   rabbitmq:
     ports:
-      - "5672:5672"   # AMQP
-      - "15672:15672" # management UI
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:5672:5672"   # AMQP
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:15672:15672" # management UI
 
   jaeger:
     ports:
-      - "16686:16686" # UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:16686:16686" # UI
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:4317:4317"   # OTLP gRPC
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:4318:4318"   # OTLP HTTP
 
   # Optional Postgres UI: docker compose ... --profile tools up -d
   pgadmin:
     profiles: [tools]
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.18
     container_name: infra-pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
@@ -51,9 +57,15 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "${PGADMIN_HOST_PORT}:80"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${PGADMIN_HOST_PORT}:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    # Same rotation as compose.yml (YAML anchors don't cross files).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:
