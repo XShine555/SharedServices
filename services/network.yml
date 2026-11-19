@@ -1,0 +1,4 @@
+# The network every project joins (declared `external: true` by consumers).
+networks:
+  infra-net:
+    name: infra-net

@@ -13,3 +13,6 @@ Thumbs.db
 
 # Edge runtime state (Let's Encrypt account, certificates, ACME challenges)
 edge/certbot/
+
+# Per-project credentials (templates stay)
+projects/*.env

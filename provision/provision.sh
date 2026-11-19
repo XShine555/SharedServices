@@ -1,6 +1,6 @@
 #!/bin/sh
-# Gives every consuming project its own credentials on the shared services,
-# so no project holds another's data or the admin accounts:
+# Gives every project in /projects/<id>.env its own credentials on the shared
+# services, so no project holds another's data or the admin accounts:
 #
 #   Postgres  role <project>, owner of database <project>_db, which no
 #             other role can connect to
@@ -13,15 +13,14 @@
 # seaweedfs-s3-config.sh.)
 #
 # Idempotent: runs on every `up`. A service is only provisioned for a project
-# when its setting is non-empty (no MUSIFY_RABBITMQ_PASSWORD, no RabbitMQ
-# user for Musify). Passwords are re-applied on every run, so changing one
+# when its setting is non-empty (no RABBITMQ_PASSWORD in musify.env, no
+# RabbitMQ user for Musify). Passwords are re-applied on every run, so changing one
 # in the env file and running `up` again rotates it.
 set -eu -o pipefail
 
 apk add --no-cache curl jq >/dev/null
 
-# Value of the <PROJECT>_<suffix> setting, empty when unset.
-setting() { eval "printf '%s' \"\${$(echo "$1" | tr '[:lower:]' '[:upper:]')_$2:-}\""; }
+. /provision/lib.sh
 
 # --- Postgres ----------------------------------------------------------------
 export PGHOST=postgres PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD"
@@ -152,7 +151,7 @@ need() { [ -n "$2" ] && [ "$2" != null ] || { echo "zitadel: got no $1" >&2; exi
 
 provision_zitadel() {
   local project=$1 zitadel_project=$2 username="$1-provisioner"
-  local project_id user_id member_roles pat_file token state
+  local project_id user_id member_roles pat_file token state expires
 
   project_id=$(zitadel "$ADMIN_PAT" POST /management/v1/projects/_search \
     "$(jq -n --arg n "$zitadel_project" '{queries: [{nameQuery: {name: $n, method: "TEXT_QUERY_METHOD_EQUALS"}}]}')" \
@@ -185,7 +184,8 @@ provision_zitadel() {
   fi
 
   # Keep a PAT that still works. A new one (they can't be read back) is only
-  # issued when there is none, or it was revoked or lost with a volume reset.
+  # issued when there is none, or it was revoked, expired (they last one year,
+  # so run `up` at least that often) or lost with a volume reset.
   pat_file="/output/$project/zitadel.pat"
   mkdir -p "/output/$project"
   chmod 700 "/output/$project"
@@ -194,7 +194,8 @@ provision_zitadel() {
       | jq -e --arg u "$username" '.user.userName == $u' >/dev/null 2>&1; then
     state="kept"
   else
-    token=$(zitadel "$ADMIN_PAT" POST "/management/v1/users/$user_id/pats" '{"expirationDate": "2099-01-01T00:00:00Z"}' | jq -r .token)
+    expires=$(date -u -d "@$(( $(date +%s) + 31536000 ))" +%Y-%m-%dT%H:%M:%SZ)
+    token=$(zitadel "$ADMIN_PAT" POST "/management/v1/users/$user_id/pats" "$(jq -n --arg e "$expires" '{expirationDate: $e}')" | jq -r .token)
     need "PAT for $username" "$token"
     (umask 077 && printf '%s\n' "$token" >"$pat_file.tmp")
     mv "$pat_file.tmp" "$pat_file"
@@ -215,7 +216,7 @@ ADMIN_PAT=$(tr -d '\r\n' </output/admin-sa.pat)
 echo "==> shared"
 lock_down_postgres
 
-for project in $PROJECTS; do
+for project in $PROJECT_IDS; do
   echo "==> $project"
   value=$(setting "$project" DB_PASSWORD)
   [ -z "$value" ] || provision_postgres "$project" "$value"

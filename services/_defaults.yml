@@ -1,0 +1,14 @@
+# Template every long-running service extends: log rotation (Docker's default
+# json-file driver never rotates), no privilege escalation, restart policy and
+# the shared network. Not part of the stack itself.
+services:
+  defaults:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks: [infra-net]

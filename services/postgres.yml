@@ -1,0 +1,23 @@
+# One instance, one database and one role per project (created by `provision`).
+# Zitadel creates its own database and user from these admin credentials. The
+# superuser is only for this stack: no project gets it.
+services:
+  postgres:
+    extends:
+      file: services/_defaults.yml
+      service: defaults
+    image: postgres:17.11-alpine
+    container_name: infra-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

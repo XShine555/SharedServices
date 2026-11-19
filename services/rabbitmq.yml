@@ -1,0 +1,26 @@
+# Message broker. Each project gets its own user and vhost from `provision`;
+# only the broker itself lives here.
+services:
+  rabbitmq:
+    extends:
+      file: services/_defaults.yml
+      service: defaults
+    image: rabbitmq:4.3.6-management-alpine
+    container_name: infra-rabbitmq
+    # The node is named rabbit@<hostname> and its data lives under that name.
+    # Without a fixed hostname every recreated container gets a new one and
+    # starts on an empty data directory (users, vhosts, queues all gone).
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rabbitmq_data:

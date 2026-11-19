@@ -1,12 +1,15 @@
 # Shared public edge: the only thing that publishes host ports 80/443. One
-# nginx terminates TLS for every project's domains (Gitea, Musify, ...) and
+# nginx terminates TLS for every project's domains (Musify, ...) and
 # proxies to their containers by name, over the networks below. Certificates
 # come from Let's Encrypt (webroot), renewed by the certbot service.
 #
 #   docker compose -f edge/compose.yml up -d
 #
-# Requires `infra-net` (created by ../compose.yml) and `gitea_gitea` (created
-# by the Gitea stack) to already exist.
+# Requires `infra-net` (created by ../compose.yml) to already exist.
+#
+# Other projects attach to the edge with a compose overlay (extra network +
+# a vhost mounted into /etc/nginx/vhosts.d/), e.g.:
+#   docker compose -f edge/compose.yml -f ../Gitea/edge/compose.yml up -d
 
 name: edge
 
@@ -21,9 +24,6 @@ x-logging: &default-logging
 networks:
   infra-net:
     name: infra-net
-    external: true
-  gitea:
-    name: gitea_gitea
     external: true
 
 services:
@@ -43,8 +43,10 @@ services:
       - ./snippets:/etc/nginx/snippets:ro
       - ./certbot/www:/var/www/certbot:ro
       - ./certbot/conf:/etc/letsencrypt:ro
-    networks: [gitea, infra-net]
+    networks: [infra-net]
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   certbot:
@@ -58,4 +60,6 @@ services:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped

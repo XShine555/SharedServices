@@ -1,0 +1,31 @@
+# One-shot, runs on every `up` (idempotent): gives each project in
+# ../projects/*.env its own Postgres role and database, RabbitMQ user and
+# vhost, and Zitadel service account (see ../provision/provision.sh). An empty
+# setting in a project's file skips that service for that project.
+services:
+  provision:
+    extends:
+      file: services/_defaults.yml
+      service: defaults
+    image: postgres:17.11-alpine
+    container_name: infra-provision
+    entrypoint: ["/bin/sh", "/provision/provision.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      ZITADEL_EXTERNAL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN}
+      ZITADEL_PUBLIC_SCHEME: ${ZITADEL_PUBLIC_SCHEME}
+    volumes:
+      - ./provision:/provision:ro
+      - ./projects:/projects:ro
+      - ./zitadel/.output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      zitadel:
+        condition: service_healthy
+    restart: "no"

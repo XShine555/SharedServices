@@ -1,0 +1,22 @@
+# OTLP collector and trace UI for any project's OpenTelemetry exporter. Last
+# Jaeger v1 release (v1 is deprecated; v2 is jaegertracing/jaeger).
+services:
+  jaeger:
+    extends:
+      file: services/_defaults.yml
+      service: defaults
+    image: jaegertracing/all-in-one:1.76.0
+    container_name: infra-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Traces are kept in memory; without a cap they grow until the
+      # container runs out of RAM. The oldest are dropped first.
+      MEMORY_MAX_TRACES: "100000"
+    # The trace cap above counts traces, not bytes: this bounds the container.
+    mem_limit: 1g
+    healthcheck:
+      # Admin port: answers 200 once the collector and query service are up.
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
