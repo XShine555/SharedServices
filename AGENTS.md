@@ -1,4 +1,4 @@
-# Shared Services
+# VPS Services
 
 Base infrastructure that other deployments build on. This file is the policy for this repository.
 
@@ -29,6 +29,7 @@ projects/          <id>.env per registered consumer (not versioned), generic exa
 provision/         scripts that create each project's own credentials
 edge/              public nginx and certbot: compose.yml, templates/ (this stack's own vhosts), vhosts.d/ (dropped in), snippets/
 scripts/           operations (backup)
+docs/              one file per topic; the README only explains what this is and links here
 ```
 
 - One Compose file per service in `services/`. A service extends `services/_defaults.yml` (log rotation, `no-new-privileges`, restart policy, `infra-net`) and adds only what is its own. Adding or dropping a service is one line in `compose.yml`.
@@ -84,7 +85,7 @@ scripts/           operations (backup)
 - Before finishing, run `docker compose config -q` for development (`--env-file .env.example -f compose.yml -f compose.dev.yml --profile tools`), production (`--env-file .env.prod.example -f compose.yml`), and `edge/compose.yml`.
 - After editing `edge/`, run `nginx -t` against the rendered templates (the nginx image renders `templates/` on start; use sample domains and a temporary certificate).
 - After editing `provision/`, run `sh -n` on the scripts and exercise `seaweedfs-s3-config.sh` with sample `projects/*.env` files made up for the test.
-- Update the README when services, ports, env variables, the project file format, or the layout change.
+- Keep the README short: what this is, what it contains, a quick start, and links to `docs/`. Details go in the matching `docs/` file. Update it when services, ports, env variables, the project file format, or the layout change.
 - Never say a deployment works without checking images, health, and routing. Say which checks you could not run.
 
 ## Version control
