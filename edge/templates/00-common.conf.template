@@ -11,6 +11,6 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
-# Extension point: overlays mount extra vhosts here (e.g. a project's own
-# edge overlay). Empty by default; an empty glob is fine for nginx.
+# Extension point: vhost files dropped in edge/vhosts.d/ by whatever wants a
+# public hostname. Empty by default; an empty glob is fine for nginx.
 include /etc/nginx/vhosts.d/*.conf;

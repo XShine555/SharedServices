@@ -1,15 +1,17 @@
-# Shared public edge: the only thing that publishes host ports 80/443. One
-# nginx terminates TLS for every project's domains (Musify, ...) and
-# proxies to their containers by name, over the networks below. Certificates
-# come from Let's Encrypt (webroot), renewed by the certbot service.
+# Public edge: the only thing that publishes host ports 80/443. One nginx
+# terminates TLS for this stack's own hostnames (identity, object storage) and
+# for any extra vhost dropped into vhosts.d/. Certificates come from Let's
+# Encrypt (webroot), renewed by the certbot service.
 #
-#   docker compose -f edge/compose.yml up -d
+#   docker compose --env-file ../.env.prod -f edge/compose.yml up -d
 #
 # Requires `infra-net` (created by ../compose.yml) to already exist.
 #
-# Other projects attach to the edge with a compose overlay (extra network +
-# a vhost mounted into /etc/nginx/vhosts.d/), e.g.:
-#   docker compose -f edge/compose.yml -f ../Gitea/edge/compose.yml up -d
+# Templates in templates/ are rendered by the nginx image with the
+# ZITADEL_EXTERNAL_DOMAIN, S3_EXTERNAL_DOMAIN and EDGE_CERT_NAME values below.
+# Anything else that wants a public hostname drops its own vhost file in
+# vhosts.d/ (it reaches its containers by name over infra-net). Nothing here
+# names or depends on it.
 
 name: edge
 
@@ -31,15 +33,25 @@ services:
     image: nginx:1.27-alpine
     container_name: edge-nginx
     # The subshell reloads nginx every 6h so renewed certificates get picked up.
+    # The entrypoint script is what renders templates/, so it has to run.
     command:
       - /bin/sh
       - -c
-      - "(while :; do sleep 6h; nginx -s reload; done) & exec nginx -g 'daemon off;'"
+      - "(while :; do sleep 6h; nginx -s reload; done) & exec /docker-entrypoint.sh nginx -g 'daemon off;'"
+    environment:
+      ZITADEL_EXTERNAL_DOMAIN: ${ZITADEL_EXTERNAL_DOMAIN:?Set ZITADEL_EXTERNAL_DOMAIN (use --env-file ../.env.prod)}
+      S3_EXTERNAL_DOMAIN: ${S3_EXTERNAL_DOMAIN:?Set S3_EXTERNAL_DOMAIN}
+      # Name of the certificate (certbot --cert-name) that covers the two
+      # hostnames above. Defaults to the identity hostname.
+      EDGE_CERT_NAME: ${EDGE_CERT_NAME:-${ZITADEL_EXTERNAL_DOMAIN}}
+      # Only these are substituted: nginx's own $variables stay untouched.
+      NGINX_ENVSUBST_FILTER: ^(ZITADEL_EXTERNAL_DOMAIN|S3_EXTERNAL_DOMAIN|EDGE_CERT_NAME)$$
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./conf.d:/etc/nginx/conf.d:ro
+      - ./templates:/etc/nginx/templates:ro
+      - ./vhosts.d:/etc/nginx/vhosts.d:ro
       - ./snippets:/etc/nginx/snippets:ro
       - ./certbot/www:/var/www/certbot:ro
       - ./certbot/conf:/etc/letsencrypt:ro

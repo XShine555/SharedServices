@@ -13,8 +13,8 @@
 # seaweedfs-s3-config.sh.)
 #
 # Idempotent: runs on every `up`. A service is only provisioned for a project
-# when its setting is non-empty (no RABBITMQ_PASSWORD in musify.env, no
-# RabbitMQ user for Musify). Passwords are re-applied on every run, so changing one
+# when its setting is non-empty (an empty RABBITMQ_PASSWORD means no RabbitMQ
+# user for that project). Passwords are re-applied on every run, so changing one
 # in the env file and running `up` again rotates it.
 set -eu -o pipefail
 

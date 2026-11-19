@@ -1,0 +1,70 @@
+# This stack's own public hostnames: identity and object storage. One
+# certificate (EDGE_CERT_NAME) covers both.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${ZITADEL_EXTERNAL_DOMAIN} ${S3_EXTERNAL_DOMAIN};
+    include /etc/nginx/snippets/acme-redirect.conf;
+}
+
+# Identity (Zitadel and its login UI).
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${ZITADEL_EXTERNAL_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${EDGE_CERT_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${EDGE_CERT_NAME}/privkey.pem;
+    include /etc/nginx/snippets/tls.conf;
+
+    # Login V2 UI, a separate container (see ../compose.yml).
+    location /ui/v2/login {
+        limit_req zone=auth burst=40 nodelay;
+        set $upstream http://infra-zitadel-login:3000;
+        proxy_pass $upstream;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+
+    # Administration (console and management APIs): administrators only.
+    # Applications never come through here: they reach Zitadel on infra-net.
+    location ~ ^/(ui/console|management|admin|system|debug|auth/v1)(/|$) {
+        include /etc/nginx/snippets/admin-allow.conf;
+        set $upstream http://infra-zitadel:8080;
+        proxy_pass $upstream;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+
+    location ~ ^/(oauth/v2|oidc/v1)/ {
+        limit_req zone=auth burst=40 nodelay;
+        set $upstream http://infra-zitadel:8080;
+        proxy_pass $upstream;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+
+    location / {
+        set $upstream http://infra-zitadel:8080;
+        proxy_pass $upstream;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+}
+
+# SeaweedFS S3: presigned PUT/GET straight from the browser.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${S3_EXTERNAL_DOMAIN};
+    client_max_body_size 1024m;
+
+    ssl_certificate     /etc/letsencrypt/live/${EDGE_CERT_NAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${EDGE_CERT_NAME}/privkey.pem;
+    include /etc/nginx/snippets/tls.conf;
+
+    location / {
+        set $upstream http://infra-seaweedfs:8333;
+        proxy_pass $upstream;
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_request_buffering off;
+    }
+}

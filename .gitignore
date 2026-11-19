@@ -16,3 +16,6 @@ edge/certbot/
 
 # Per-project credentials (templates stay)
 projects/*.env
+
+# Vhosts dropped in by whatever wants a public hostname (the folder stays)
+edge/vhosts.d/*.conf

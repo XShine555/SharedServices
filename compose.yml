@@ -1,5 +1,6 @@
-# Shared infrastructure for every project (Musify, Ping, docker-manager, ...):
-# identity, database, object storage, messaging and tracing.
+# Shared infrastructure: identity, database, object storage, messaging and
+# tracing. It knows nothing about who uses it: consumers register themselves
+# by adding a file to projects/.
 #
 # This is the production shape: no published ports, no domains. Everything is
 # reachable only on `infra-net`. Development adds the ports with compose.dev.yml.
